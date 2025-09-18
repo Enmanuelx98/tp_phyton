@@ -18,20 +18,19 @@ MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
 MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"actionsv2_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words.json")
 
-# Funciones auxiliares (como en tu código)
-def mediapipe_detection(image, model):
-    import cv2
+# --- Cargar modelo y word_ids solo una vez ---
+model = load_model(MODEL_PATH)
+with open(WORDS_JSON_PATH, 'r') as f:
+    word_ids = json.load(f).get('word_ids')
+
+# --- Funciones auxiliares ---
+def mediapipe_detection(image, holistic_model):
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image.flags.writeable = False
-    return model.process(image)
+    return holistic_model.process(image)
 
 def there_hand(results):
     return results.left_hand_landmarks or results.right_hand_landmarks
-
-def get_word_ids(path):
-    with open(path, 'r') as f:
-        data = json.load(f)
-        return data.get('word_ids')
 
 def extract_hand_keypoints(results):
     lh = np.array([[res.x, res.y, res.z] for res in
@@ -56,15 +55,15 @@ def normalize_sequence(sequence, target_length=15):
             normalized.append((1-w)*np.array(sequence[lower]) + w*np.array(sequence[upper]))
     return np.array(normalized)
 
+# --- Procesamiento del video ---
 def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     kp_seq = []
-    sentence = []
-    model = load_model(MODEL_PATH)
-    word_ids = get_word_ids(WORDS_JSON_PATH)
+    pred_word = None  # no guardamos toda la oración, solo la última predicción
 
     count_frame = 0
     fix_frames = 0
     recording = False
+    frame_skip = 2  # procesar 1 de cada 2 frames
 
     with Holistic() as holistic_model:
         cap = cv2.VideoCapture(video_path)
@@ -76,8 +75,12 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
             if not ret:
                 break
 
-            # Reducir resolución para ahorrar RAM
-            # frame = cv2.resize(frame, (320, 240))
+            # saltar frames innecesarios
+            if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % frame_skip != 0:
+                continue
+
+            # resolución más baja
+            frame = cv2.resize(frame, (224, 224))
 
             results = mediapipe_detection(frame, holistic_model)
 
@@ -95,21 +98,27 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
 
                     kp_seq = kp_seq[:-(delay_frames)]
                     if len(kp_seq) > 0:
-                        kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES)
-                        res = model.predict(np.expand_dims(kp_norm, axis=0))[0]
-                        idx = np.argmax(res)
-                        conf = res[idx]
+                        # usar float16 para ahorrar memoria
+                        kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES).astype(np.float16)
+                        res = model.predict(np.expand_dims(kp_norm, axis=0), verbose=0)[0]
+                        idx = int(np.argmax(res))
+                        conf = float(res[idx])
                         if conf > threshold:
                             pred_word = word_ids[idx]
-                            sentence.append(pred_word)
 
+                    # resetear
                     kp_seq = []
                     count_frame = 0
                     fix_frames = 0
                     recording = False
 
+            # liberar memoria
+            del results
+
         cap.release()
-    return sentence
+        cv2.destroyAllWindows()
+
+    return [pred_word] if pred_word else []
 
 # --- API ---
 @app.post("/predict")
@@ -126,5 +135,3 @@ async def predict(video: UploadFile = File(...)):
 
     return JSONResponse(content={"prediction": result})
 
-if __name__ == "__main__":
-    uvicorn.run("API:app", host="0.0.0.0", port=5000, reload=True)
