@@ -73,7 +73,7 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     count_frame = 0
     fix_frames = 0
     recording = False
-    frame_skip = 2  # procesar 1 de cada 2 frames
+    frame_skip = 1  # procesar 1 de cada 2 frames
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
