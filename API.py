@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 import json
 import tempfile
-import atexit
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File
@@ -19,39 +18,39 @@ MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
 MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"actionsv2_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words.json")
 
-# --- Cargar modelo, word_ids y Holistic globalmente ---
-model = load_model(MODEL_PATH)
-with open(WORDS_JSON_PATH, 'r') as f:
-    word_ids = json.load(f).get('word_ids')
 
-holistic_model = Holistic()  # Holistic global
-
-# Liberar recursos al cerrar la app
-def close_holistic():
-    holistic_model.close()
-atexit.register(close_holistic)
-
-# --- Funciones auxiliares ---
-def mediapipe_detection(image):
+# Funciones auxiliares (como en tu código)
+def mediapipe_detection(image, model):
+    import cv2
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image.flags.writeable = False
-    return holistic_model.process(image)
+    return model.process(image)
+
 
 def there_hand(results):
     return results.left_hand_landmarks or results.right_hand_landmarks
 
+
+def get_word_ids(path):
+    with open(path, 'r') as f:
+        data = json.load(f)
+        return data.get('word_ids')
+
+
 def extract_hand_keypoints(results):
     lh = np.array([[res.x, res.y, res.z] for res in
-                   results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
+                   results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21 * 3)
     rh = np.array([[res.x, res.y, res.z] for res in
-                   results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
+                   results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(
+        21 * 3)
     return np.concatenate([lh, rh])
+
 
 def normalize_sequence(sequence, target_length=15):
     current_length = len(sequence)
     if current_length == target_length:
         return np.array(sequence)
-    indices = np.linspace(0, current_length-1, target_length)
+    indices = np.linspace(0, current_length - 1, target_length)
     normalized = []
     for i in indices:
         lower = int(np.floor(i))
@@ -60,61 +59,65 @@ def normalize_sequence(sequence, target_length=15):
         if lower == upper:
             normalized.append(sequence[lower])
         else:
-            normalized.append((1-w)*np.array(sequence[lower]) + w*np.array(sequence[upper]))
+            normalized.append((1 - w) * np.array(sequence[lower]) + w * np.array(sequence[upper]))
     return np.array(normalized)
 
-# --- Procesamiento del video ---
+
 def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     kp_seq = []
     sentence = []
+    model = load_model(MODEL_PATH)
+    word_ids = get_word_ids(WORDS_JSON_PATH)
 
     count_frame = 0
     fix_frames = 0
     recording = False
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise FileNotFoundError(f"No se pudo abrir el video: {video_path}")
+    with Holistic() as holistic_model:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise FileNotFoundError(f"No se pudo abrir el video: {video_path}")
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        # 🔹 Reducir resolución para ahorrar RAM
-        frame = cv2.resize(frame, (320, 240))
+            # Reducir resolución para ahorrar RAM
+            # frame = cv2.resize(frame, (320, 240))
 
-        results = mediapipe_detection(frame)
+            results = mediapipe_detection(frame, holistic_model)
 
-        if there_hand(results) or recording:
-            recording = False
-            count_frame += 1
-            if count_frame > 1:
-                kp_seq.append(extract_hand_keypoints(results))
-        else:
-            if count_frame >= min_frames:
-                fix_frames += 1
-                if fix_frames < delay_frames:
-                    recording = True
-                    continue
-
-                kp_seq = kp_seq[:-(delay_frames)]
-                if len(kp_seq) > 0:
-                    kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES)
-                    res = model.predict(np.expand_dims(kp_norm, axis=0))[0]
-                    idx = np.argmax(res)
-                    conf = res[idx]
-                    if conf > threshold:
-                        pred_word = word_ids[idx]
-                        sentence.append(pred_word)
-
-                kp_seq = []
-                count_frame = 0
-                fix_frames = 0
+            if there_hand(results) or recording:
                 recording = False
+                count_frame += 1
+                if count_frame > 1:
+                    kp_seq.append(extract_hand_keypoints(results))
+            else:
+                if count_frame >= min_frames:
+                    fix_frames += 1
+                    if fix_frames < delay_frames:
+                        recording = True
+                        continue
 
-    cap.release()
+                    kp_seq = kp_seq[:-(delay_frames)]
+                    if len(kp_seq) > 0:
+                        kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES)
+                        res = model.predict(np.expand_dims(kp_norm, axis=0))[0]
+                        idx = np.argmax(res)
+                        conf = res[idx]
+                        if conf > threshold:
+                            pred_word = word_ids[idx]
+                            sentence.append(pred_word)
+
+                    kp_seq = []
+                    count_frame = 0
+                    fix_frames = 0
+                    recording = False
+
+        cap.release()
     return sentence
+
 
 # --- API ---
 @app.post("/predict")
