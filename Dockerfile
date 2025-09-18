@@ -19,7 +19,10 @@ WORKDIR /app
 COPY . /app
 
 # Instalamos dependencias Python
-RUN pip install fastapi uvicorn keras numpy opencv-python mediapipe
+#RUN pip install fastapi uvicorn keras tensorflow numpy opencv-python mediapipe
+# Instalamos dependencias Python desde requirements.txt
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 
 # Exponemos el puerto que usará FastAPI
 EXPOSE 5000
