@@ -18,19 +18,20 @@ MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
 MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"actionsv2_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words.json")
 
-# --- Cargar modelo y word_ids solo una vez ---
-model = load_model(MODEL_PATH)
-with open(WORDS_JSON_PATH, 'r') as f:
-    word_ids = json.load(f).get('word_ids')
-
-# --- Funciones auxiliares ---
-def mediapipe_detection(image, holistic_model):
+# Funciones auxiliares (como en tu código)
+def mediapipe_detection(image, model):
+    import cv2
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image.flags.writeable = False
-    return holistic_model.process(image)
+    return model.process(image)
 
 def there_hand(results):
     return results.left_hand_landmarks or results.right_hand_landmarks
+
+def get_word_ids(path):
+    with open(path, 'r') as f:
+        data = json.load(f)
+        return data.get('word_ids')
 
 def extract_hand_keypoints(results):
     lh = np.array([[res.x, res.y, res.z] for res in
@@ -55,10 +56,11 @@ def normalize_sequence(sequence, target_length=15):
             normalized.append((1-w)*np.array(sequence[lower]) + w*np.array(sequence[upper]))
     return np.array(normalized)
 
-# --- Procesamiento del video ---
 def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     kp_seq = []
     sentence = []
+    model = load_model(MODEL_PATH)
+    word_ids = get_word_ids(WORDS_JSON_PATH)
 
     count_frame = 0
     fix_frames = 0
@@ -73,9 +75,6 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
             ret, frame = cap.read()
             if not ret:
                 break
-
-            # 🔹 Reducir resolución para ahorrar RAM
-            frame = cv2.resize(frame, (320, 240))
 
             results = mediapipe_detection(frame, holistic_model)
 
