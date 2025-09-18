@@ -130,7 +130,3 @@ async def predict(video: UploadFile = File(...)):
         os.remove(video_path)
 
     return JSONResponse(content={"prediction": result})
-
-
-if __name__ == "__main__":
-    uvicorn.run("PRUEBAAPIV2:app", host="0.0.0.0", port=5000, reload=True)
