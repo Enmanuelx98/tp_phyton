@@ -18,7 +18,6 @@ MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
 MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"actionsv2_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words.json")
 
-
 # Funciones auxiliares (como en tu código)
 def mediapipe_detection(image, model):
     import cv2
@@ -26,31 +25,26 @@ def mediapipe_detection(image, model):
     image.flags.writeable = False
     return model.process(image)
 
-
 def there_hand(results):
     return results.left_hand_landmarks or results.right_hand_landmarks
-
 
 def get_word_ids(path):
     with open(path, 'r') as f:
         data = json.load(f)
         return data.get('word_ids')
 
-
 def extract_hand_keypoints(results):
     lh = np.array([[res.x, res.y, res.z] for res in
-                   results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21 * 3)
+                   results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
     rh = np.array([[res.x, res.y, res.z] for res in
-                   results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(
-        21 * 3)
+                   results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
     return np.concatenate([lh, rh])
-
 
 def normalize_sequence(sequence, target_length=15):
     current_length = len(sequence)
     if current_length == target_length:
         return np.array(sequence)
-    indices = np.linspace(0, current_length - 1, target_length)
+    indices = np.linspace(0, current_length-1, target_length)
     normalized = []
     for i in indices:
         lower = int(np.floor(i))
@@ -59,9 +53,8 @@ def normalize_sequence(sequence, target_length=15):
         if lower == upper:
             normalized.append(sequence[lower])
         else:
-            normalized.append((1 - w) * np.array(sequence[lower]) + w * np.array(sequence[upper]))
+            normalized.append((1-w)*np.array(sequence[lower]) + w*np.array(sequence[upper]))
     return np.array(normalized)
-
 
 def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     kp_seq = []
@@ -118,7 +111,6 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
         cap.release()
     return sentence
 
-
 # --- API ---
 @app.post("/predict")
 async def predict(video: UploadFile = File(...)):
@@ -133,3 +125,6 @@ async def predict(video: UploadFile = File(...)):
         os.remove(video_path)
 
     return JSONResponse(content={"prediction": result})
+
+if __name__ == "__main__":
+    uvicorn.run("API:app", host="0.0.0.0", port=5000, reload=True)
