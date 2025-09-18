@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import json
 import tempfile
+import atexit
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File
@@ -18,24 +19,20 @@ MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
 MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"actionsv2_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words.json")
 
-# Variables globales
-model = None
-word_ids = None
+# --- Cargar modelo, word_ids y Holistic globalmente ---
+model = load_model(MODEL_PATH)
+with open(WORDS_JSON_PATH, 'r') as f:
+    word_ids = json.load(f).get('word_ids')
 
+holistic_model = Holistic()  # Holistic global
 
-# --- Cargar modelo y recursos en el startup ---
-@app.on_event("startup")
-def load_resources():
-    global model, word_ids
-    model = load_model(MODEL_PATH)
-    # 👇 asegura compatibilidad en threads
-    model.make_predict_function()
-    with open(WORDS_JSON_PATH, 'r') as f:
-        word_ids = json.load(f).get('word_ids')
-
+# Liberar recursos al cerrar la app
+def close_holistic():
+    holistic_model.close()
+atexit.register(close_holistic)
 
 # --- Funciones auxiliares ---
-def mediapipe_detection(image, holistic_model):
+def mediapipe_detection(image):
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image.flags.writeable = False
     return holistic_model.process(image)
@@ -66,7 +63,6 @@ def normalize_sequence(sequence, target_length=15):
             normalized.append((1-w)*np.array(sequence[lower]) + w*np.array(sequence[upper]))
     return np.array(normalized)
 
-
 # --- Procesamiento del video ---
 def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     kp_seq = []
@@ -76,51 +72,49 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     fix_frames = 0
     recording = False
 
-    with Holistic() as holistic_model:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"No se pudo abrir el video: {video_path}")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise FileNotFoundError(f"No se pudo abrir el video: {video_path}")
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-            # 🔹 Reducir resolución para ahorrar RAM
-            frame = cv2.resize(frame, (320, 240))
+        # 🔹 Reducir resolución para ahorrar RAM
+        frame = cv2.resize(frame, (320, 240))
 
-            results = mediapipe_detection(frame, holistic_model)
+        results = mediapipe_detection(frame)
 
-            if there_hand(results) or recording:
+        if there_hand(results) or recording:
+            recording = False
+            count_frame += 1
+            if count_frame > 1:
+                kp_seq.append(extract_hand_keypoints(results))
+        else:
+            if count_frame >= min_frames:
+                fix_frames += 1
+                if fix_frames < delay_frames:
+                    recording = True
+                    continue
+
+                kp_seq = kp_seq[:-(delay_frames)]
+                if len(kp_seq) > 0:
+                    kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES)
+                    res = model.predict(np.expand_dims(kp_norm, axis=0))[0]
+                    idx = np.argmax(res)
+                    conf = res[idx]
+                    if conf > threshold:
+                        pred_word = word_ids[idx]
+                        sentence.append(pred_word)
+
+                kp_seq = []
+                count_frame = 0
+                fix_frames = 0
                 recording = False
-                count_frame += 1
-                if count_frame > 1:
-                    kp_seq.append(extract_hand_keypoints(results))
-            else:
-                if count_frame >= min_frames:
-                    fix_frames += 1
-                    if fix_frames < delay_frames:
-                        recording = True
-                        continue
 
-                    kp_seq = kp_seq[:-(delay_frames)]
-                    if len(kp_seq) > 0:
-                        kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES)
-                        res = model.predict(np.expand_dims(kp_norm, axis=0))[0]
-                        idx = np.argmax(res)
-                        conf = res[idx]
-                        if conf > threshold:
-                            pred_word = word_ids[idx]
-                            sentence.append(pred_word)
-
-                    kp_seq = []
-                    count_frame = 0
-                    fix_frames = 0
-                    recording = False
-
-        cap.release()
+    cap.release()
     return sentence
-
 
 # --- API ---
 @app.post("/predict")
