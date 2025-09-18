@@ -27,7 +27,7 @@ with open(WORDS_JSON_PATH, 'r') as f:
 
 # --- Holistic global ---
 holistic_model = Holistic(static_image_mode=False,
-                          model_complexity=1,
+                          model_complexity=0,
                           smooth_landmarks=True,
                           enable_segmentation=False,
                           refine_face_landmarks=False,
@@ -73,7 +73,7 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
     count_frame = 0
     fix_frames = 0
     recording = False
-    frame_skip = 1  # procesar 1 de cada 2 frames
+    frame_skip = 1  # procesar 1 de cada 1 frames
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
