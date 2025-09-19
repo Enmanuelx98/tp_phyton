@@ -103,9 +103,6 @@ def evaluate_video(video_path, threshold=0.8):
 
     # liberar memoria manualmente
     gc.collect()
-
-    return [pred_word] if pred_word else []
-
     tf.keras.backend.clear_session()
 
     return [pred_word] if pred_word else []
