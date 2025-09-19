@@ -67,13 +67,8 @@ def normalize_sequence(sequence, target_length=15):
     return np.array(normalized)
 
 # --- Procesamiento del video ---
-def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
+def evaluate_video(video_path, threshold=0.8):
     kp_seq = []
-    pred_word = None
-    count_frame = 0
-    fix_frames = 0
-    recording = False
-    frame_skip = 1  # procesar 1 de cada 1 frames
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -84,48 +79,34 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
         if not ret:
             break
 
-        # saltar frames innecesarios
-        if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % frame_skip != 0:
-            continue
-
         # resolución más baja
         frame = cv2.resize(frame, (224, 224))
         results = mediapipe_detection(frame)
 
-        if there_hand(results) or recording:
-            recording = False
-            count_frame += 1
-            if count_frame > 1:
-                kp_seq.append(extract_hand_keypoints(results))
-        else:
-            if count_frame >= min_frames:
-                fix_frames += 1
-                if fix_frames < delay_frames:
-                    recording = True
-                    continue
-
-                kp_seq = kp_seq[:-(delay_frames)]
-                if len(kp_seq) > 0:
-                    kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES).astype(np.float16)
-                    res = model.predict(np.expand_dims(kp_norm, axis=0), verbose=0)[0]
-                    idx = int(np.argmax(res))
-                    conf = float(res[idx])
-                    if conf > threshold:
-                        pred_word = word_ids[idx]
-
-                # resetear
-                kp_seq = []
-                count_frame = 0
-                fix_frames = 0
-                recording = False
+        # recolectar keypoints de cada frame donde haya manos
+        if there_hand(results):
+            kp_seq.append(extract_hand_keypoints(results))
 
         del results
 
     cap.release()
 
+    pred_word = None
+    if len(kp_seq) > 0:
+        # 🔹 CAMBIO PRINCIPAL: predecir solo una vez al final
+        kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES).astype(np.float16)
+        res = model.predict(np.expand_dims(kp_norm, axis=0), verbose=0)[0]
+        idx = int(np.argmax(res))
+        conf = float(res[idx])
+        if conf > threshold:
+            pred_word = word_ids[idx]
+
     # liberar memoria manualmente
     gc.collect()
-    #tf.keras.backend.clear_session()
+
+    return [pred_word] if pred_word else []
+
+    tf.keras.backend.clear_session()
 
     return [pred_word] if pred_word else []
 
