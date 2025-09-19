@@ -89,7 +89,7 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
             continue
 
         # resolución más baja
-        frame = cv2.resize(frame, (128, 128))
+        frame = cv2.resize(frame, (224, 224))
         results = mediapipe_detection(frame)
 
         if there_hand(results) or recording:
