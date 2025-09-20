@@ -15,14 +15,15 @@ RUN pip install --upgrade pip setuptools wheel
 # Creamos directorio de trabajo
 WORKDIR /app
 
+# Instalamos dependencias Python desde requirements.txt
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
 # Copiamos archivos del proyecto al contenedor
 COPY . /app
 
 # Instalamos dependencias Python
 #RUN pip install fastapi uvicorn keras tensorflow numpy opencv-python mediapipe
-# Instalamos dependencias Python desde requirements.txt
-COPY requirements.txt .
-RUN pip install -r requirements.txt
 
 # Exponemos el puerto que usará FastAPI
 EXPOSE 5000
