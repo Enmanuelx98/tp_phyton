@@ -26,7 +26,7 @@ COPY . /app
 #RUN pip install fastapi uvicorn keras tensorflow numpy opencv-python mediapipe
 
 # Exponemos el puerto que usará FastAPI
-EXPOSE 5000
+EXPOSE 80
 
 # Comando para iniciar la aplicación
-CMD ["uvicorn", "API:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["uvicorn", "API:app", "--host", "0.0.0.0", "--port", "80"]
