@@ -17,13 +17,22 @@ app = FastAPI()
 MODEL_FRAMES = 15
 ROOT_PATH = os.getcwd()
 MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
-MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"actionsv2_{MODEL_FRAMES}.keras")
-WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words.json")
 
-# --- Cargar modelo y word_ids solo una vez ---
+# --- Modelos y JSONs ---
+MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"modelLSP_v2_{MODEL_FRAMES}.keras")
+WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words_asl.json")
+
+MODEL_PATH_ASL = os.path.join(MODEL_FOLDER_PATH, f"modelASL_v2_{MODEL_FRAMES}.keras")
+WORDS_JSON_PATH_ASL = os.path.join(MODEL_FOLDER_PATH, "words.json")
+
+# --- Cargar modelos y word_ids ---
 model = load_model(MODEL_PATH)
 with open(WORDS_JSON_PATH, 'r') as f:
     word_ids = json.load(f).get('word_ids')
+
+model_asl = load_model(MODEL_PATH_ASL)
+with open(WORDS_JSON_PATH_ASL, 'r') as f:
+    word_ids_asl = json.load(f).get('word_ids')
 
 # --- Holistic global ---
 holistic_model = Holistic(static_image_mode=False,
@@ -66,14 +75,14 @@ def normalize_sequence(sequence, target_length=15):
             normalized.append((1-w)*np.array(sequence[lower]) + w*np.array(sequence[upper]))
     return np.array(normalized)
 
-# --- Procesamiento del video ---
-def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
+# --- Procesamiento del video (generalizado) ---
+def evaluate_video(video_path, model, word_ids, threshold=0.8, min_frames=5, delay_frames=3):
     kp_seq = []
     pred_word = None
     count_frame = 0
     fix_frames = 0
     recording = False
-    frame_skip = 1  # procesar 1 de cada 1 frames
+    frame_skip = 1
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -84,11 +93,9 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
         if not ret:
             break
 
-        # saltar frames innecesarios
         if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % frame_skip != 0:
             continue
 
-        # resolución más baja
         frame = cv2.resize(frame, (224, 224))
         results = mediapipe_detection(frame)
 
@@ -113,7 +120,6 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
                     if conf > threshold:
                         pred_word = word_ids[idx]
 
-                # resetear
                 kp_seq = []
                 count_frame = 0
                 fix_frames = 0
@@ -122,8 +128,6 @@ def evaluate_video(video_path, threshold=0.8, min_frames=5, delay_frames=3):
         del results
 
     cap.release()
-
-    # liberar memoria manualmente
     gc.collect()
     tf.keras.backend.clear_session()
 
@@ -138,9 +142,25 @@ async def predict(video: UploadFile = File(...)):
         tmp.write(contents)
 
     try:
-        result = evaluate_video(video_path)
+        result = evaluate_video(video_path, model, word_ids)
     finally:
         os.remove(video_path)
 
-    return JSONResponse(content={"prediction": result})
-#amen
+    return JSONResponse(content={"prediction": result[0] if result else None})
+
+@app.post("/predictASL")
+async def predict_asl(video: UploadFile = File(...)):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        video_path = tmp.name
+        contents = await video.read()
+        tmp.write(contents)
+
+    try:
+        result = evaluate_video(video_path, model_asl, word_ids_asl)
+    finally:
+        os.remove(video_path)
+
+    return JSONResponse(content={"prediction": result[0] if result else None})
+
+if __name__ == "__main__":
+    uvicorn.run("API:app", host="0.0.0.0", port=5000, reload=False)
