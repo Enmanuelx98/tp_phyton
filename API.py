@@ -162,5 +162,3 @@ async def predict_asl(video: UploadFile = File(...)):
 
     return JSONResponse(content={"prediction": result[0] if result else None})
 
-if __name__ == "__main__":
-    uvicorn.run("API:app", host="0.0.0.0", port=5000, reload=False)
