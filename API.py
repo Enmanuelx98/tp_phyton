@@ -146,7 +146,7 @@ async def predict(video: UploadFile = File(...)):
     finally:
         os.remove(video_path)
 
-    return JSONResponse(content={"prediction": result[0] if result else None})
+    return JSONResponse(content={"prediction": result})
 
 @app.post("/predictASL")
 async def predict_asl(video: UploadFile = File(...)):
@@ -160,5 +160,5 @@ async def predict_asl(video: UploadFile = File(...)):
     finally:
         os.remove(video_path)
 
-    return JSONResponse(content={"prediction": result[0] if result else None})
+    return JSONResponse(content={"prediction": result})
 
