@@ -1,226 +1,176 @@
 import os
 import cv2
+import base64
 import numpy as np
 import json
-import tempfile
 import gc
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, Form
+from typing import List
+from fastapi import FastAPI, Body
 from fastapi.responses import JSONResponse
 from keras.models import load_model
 from mediapipe.python.solutions.holistic import Holistic, HAND_CONNECTIONS
-from mediapipe.python.solutions.drawing_utils import draw_landmarks, DrawingSpec
 
 app = FastAPI()
 
+# ---------- SETTINGS ----------
 MODEL_FRAMES = 15
+THRESHOLD = 0.7
+
 ROOT_PATH = os.getcwd()
 MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
 
-# --- Modelos y JSONs ---
+# ---------- Modelos y JSONs ----------
 MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"modelLSP_v2_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words_asl.json")
 
 MODEL_PATH_ASL = os.path.join(MODEL_FOLDER_PATH, f"modelASL_v2_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH_ASL = os.path.join(MODEL_FOLDER_PATH, "words.json")
 
-# --- Cargar modelos y word_ids ---
+# ---------- Cargar modelos ----------
 model = load_model(MODEL_PATH)
-with open(WORDS_JSON_PATH, 'r') as f:
-    word_ids = json.load(f).get('word_ids')
+with open(WORDS_JSON_PATH, "r") as f:
+    word_ids = json.load(f).get("word_ids")
 
 model_asl = load_model(MODEL_PATH_ASL)
-with open(WORDS_JSON_PATH_ASL, 'r') as f:
-    word_ids_asl = json.load(f).get('word_ids')
+with open(WORDS_JSON_PATH_ASL, "r") as f:
+    word_ids_asl = json.load(f).get("word_ids")
 
-# --- Holistic global ---
-holistic_model = Holistic(
-    static_image_mode=False,
-    model_complexity=2,
-    smooth_landmarks=True,
+# ---------- Inicializar MediaPipe ----------
+holistic = Holistic(
+    static_image_mode=True,
+    model_complexity=1,
+    smooth_landmarks=False,
     enable_segmentation=False,
     refine_face_landmarks=False,
-    min_detection_confidence=0.2,
-    min_tracking_confidence=0.3
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
 )
 
-def draw_hand_landmarks(frame, results):
-    if results.left_hand_landmarks and not results.right_hand_landmarks:
-        draw_landmarks(frame, results.left_hand_landmarks, HAND_CONNECTIONS,
-                       DrawingSpec(color=(121, 22, 76), thickness=2, circle_radius=4),
-                       DrawingSpec(color=(121, 44, 250), thickness=2, circle_radius=2))
-    elif results.right_hand_landmarks and not results.left_hand_landmarks:
-        draw_landmarks(frame, results.right_hand_landmarks, HAND_CONNECTIONS,
-                       DrawingSpec(color=(245, 117, 66), thickness=2, circle_radius=4),
-                       DrawingSpec(color=(245, 66, 230), thickness=2, circle_radius=2))
-    elif results.left_hand_landmarks and results.right_hand_landmarks:
-        draw_landmarks(frame, results.left_hand_landmarks, HAND_CONNECTIONS,
-                       DrawingSpec(color=(121, 22, 76), thickness=2, circle_radius=4),
-                       DrawingSpec(color=(121, 44, 250), thickness=2, circle_radius=2))
-        draw_landmarks(frame, results.right_hand_landmarks, HAND_CONNECTIONS,
-                       DrawingSpec(color=(245, 117, 66), thickness=2, circle_radius=4),
-                       DrawingSpec(color=(245, 66, 230), thickness=2, circle_radius=2))
+# ---------- Helpers ----------
+def strip_base64_prefix(s: str) -> str:
+    if "," in s:
+        return s.split(",", 1)[1]
+    return s
+
+def image_from_base64(b64str: str):
+    try:
+        b64 = strip_base64_prefix(b64str)
+        data = base64.b64decode(b64)
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return img
+    except Exception:
+        return None
 
 def mediapipe_detection(image):
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image.flags.writeable = False
-    return holistic_model.process(image)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image_rgb.flags.writeable = False
+    results = holistic.process(image_rgb)
+    return results
 
-def there_hand(results):
-    return results.left_hand_landmarks or results.right_hand_landmarks
+def draw_hand_landmarks(image, results):
+    h, w, _ = image.shape
 
-def extract_hand_keypoints(results):
-    lh = np.array([[res.x, res.y, res.z] for res in
-                   results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
-    rh = np.array([[res.x, res.y, res.z] for res in
-                   results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
+    if results.left_hand_landmarks:
+        for connection in HAND_CONNECTIONS:
+            start = results.left_hand_landmarks.landmark[connection[0]]
+            end = results.left_hand_landmarks.landmark[connection[1]]
+            cv2.line(image,
+                     (int(start.x * w), int(start.y * h)),
+                     (int(end.x * w), int(end.y * h)),
+                     (0, 255, 0), 2)
+        for lm in results.left_hand_landmarks.landmark:
+            cx, cy = int(lm.x * w), int(lm.y * h)
+            cv2.circle(image, (cx, cy), 3, (0, 255, 0), -1)
+
+    if results.right_hand_landmarks:
+        for connection in HAND_CONNECTIONS:
+            start = results.right_hand_landmarks.landmark[connection[0]]
+            end = results.right_hand_landmarks.landmark[connection[1]]
+            cv2.line(image,
+                     (int(start.x * w), int(start.y * h)),
+                     (int(end.x * w), int(end.y * h)),
+                     (0, 0, 255), 2)
+        for lm in results.right_hand_landmarks.landmark:
+            cx, cy = int(lm.x * w), int(lm.y * h)
+            cv2.circle(image, (cx, cy), 3, (0, 0, 255), -1)
+
+def extract_keypoints_from_results(results):
+    lh = np.array([[lm.x, lm.y, lm.z] for lm in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
+    rh = np.array([[lm.x, lm.y, lm.z] for lm in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
     return np.concatenate([lh, rh])
 
-def rotate_video(input_path, output_path, camera: int = 2):
-    cap = cv2.VideoCapture(input_path)
-    if not cap.isOpened():
-        raise FileNotFoundError(f"No se pudo abrir el video: {input_path}")
-
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    width = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if camera == 2:
-            rotated = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        elif camera == 1:
-            rotated = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        else:
-            rotated = frame
-
-        out.write(rotated)
-
-    cap.release()
-    out.release()
-
-def interpolate_keypoints(keypoints, target_length=15):
-    current_length = len(keypoints)
-    if current_length == target_length:
-        return keypoints
-    indices = np.linspace(0, current_length - 1, target_length)
-    interpolated_keypoints = []
-    for i in indices:
-        lower_idx = int(np.floor(i))
-        upper_idx = int(np.ceil(i))
-        weight = i - lower_idx
-        if lower_idx == upper_idx:
-            interpolated_keypoints.append(keypoints[lower_idx])
-        else:
-            interpolated_point = (1 - weight) * np.array(keypoints[lower_idx]) + weight * np.array(keypoints[upper_idx])
-            interpolated_keypoints.append(interpolated_point.tolist())
-    return interpolated_keypoints
-
-def normalize_sequence(keypoints, target_length=15):
-    current_length = len(keypoints)
-    if current_length < target_length:
-        return np.array(interpolate_keypoints(keypoints, target_length))
-    elif current_length > target_length:
-        step = current_length / target_length
-        indices = np.arange(0, current_length, step).astype(int)[:target_length]
-        return np.array([keypoints[i] for i in indices])
-    else:
-        return np.array(keypoints)
-
-def evaluate_video(video_path, model, word_ids, threshold=0.8, min_frames=5, delay_frames=3):
+# ---------- Core predict ----------
+def predict_sequence(frames_b64: List[str], model, word_ids, camera_id=1):
     kp_seq = []
-    pred_word = None
-    count_frame = 0
-    fix_frames = 0
-    recording = False
-    frame_skip = 1
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise FileNotFoundError(f"No se pudo abrir el video: {video_path}")
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % frame_skip != 0:
+    for i, b64 in enumerate(frames_b64):
+        img = image_from_base64(b64)
+        if img is None:
+            print(f"[Frame {i}] No se pudo decodificar.")
             continue
 
-        frame = cv2.resize(frame, (640, 480))
-        results = mediapipe_detection(frame)
-
-        # --- Captura de keypoints ---
-        if there_hand(results) or recording:
-            recording = False
-            count_frame += 1
-            if count_frame > 1:
-                kp_seq.append(extract_hand_keypoints(results))
+        # Si es frontal (2) → gira 90° a la izquierda
+        # Si es trasera (1) → gira 270° a la izquierda
+        if camera_id == 2:
+            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
         else:
-            if count_frame >= min_frames:
-                fix_frames += 1
-                if fix_frames < delay_frames:
-                    recording = True
-                    continue
-                kp_seq = kp_seq[:-(delay_frames)]
-                if len(kp_seq) > 0:
-                    kp_norm = normalize_sequence(kp_seq, MODEL_FRAMES).astype(np.float16)
-                    res = model.predict(np.expand_dims(kp_norm, axis=0), verbose=0)[0]
-                    idx = int(np.argmax(res))
-                    conf = float(res[idx])
-                    if conf > threshold:
-                        pred_word = word_ids[idx]
-                kp_seq = []
-                count_frame = 0
-                fix_frames = 0
-                recording = False
+            # o directamente:
+            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
 
-        del results
+        results = mediapipe_detection(img)
+        kp = extract_keypoints_from_results(results)
+        kp_seq.append(kp)
 
-    cap.release()
-    gc.collect()
+        # Mostrar frames
+        #draw_hand_landmarks(img, results)
+        #cv2.putText(img, f"Frame {i+1}", (10, 30),
+        #            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        #cv2.imshow("Detección de Keypoints", img)
+        #cv2.waitKey(80)
 
-    return [pred_word] if pred_word else []
+    #cv2.destroyAllWindows()
 
-@app.post("/predict")
-async def predict(video: UploadFile = File(...), camera: int = Form(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        video_path = tmp.name
-        tmp.write(await video.read())
+    if not kp_seq:
+        return {"error": "No valid frames with hands detected"}
 
-    rotated_path = video_path.replace(".mp4", "_rotated.mp4")
-    rotate_video(video_path, rotated_path, camera)
+    kp_seq = np.array(kp_seq, dtype=np.float16)
 
+    pred = model.predict(np.expand_dims(kp_seq, axis=0), verbose=0)[0]
+    idx = int(np.argmax(pred))
+    conf = float(pred[idx])
+    word = word_ids[idx] if conf > THRESHOLD else None
+
+    return {"prediction": [word], "confidence": conf}
+
+
+# ---------- Endpoints ----------
+@app.post("/predict_sequence")
+async def predict_sequence_lsp(payload: dict = Body(...)):
     try:
-        result = evaluate_video(rotated_path, model, word_ids)
+        frames_b64 = payload.get("frames") or payload.get("sequence")
+        camera_id = payload.get("camera", 1)  # 1 = trasera, 2 = frontal NUEVO
+
+        if not frames_b64:
+            return JSONResponse({"error": "No frames provided"}, status_code=400)
+
+        result = predict_sequence(frames_b64, model, word_ids, camera_id)
+        return JSONResponse(result)
     finally:
-        os.remove(video_path)
-        if os.path.exists(rotated_path):
-            os.remove(rotated_path)
+        gc.collect()
 
-    return JSONResponse(content={"prediction": result})
-
-@app.post("/predictASL")
-async def predict_asl(video: UploadFile = File(...), camera: int = Form(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        video_path = tmp.name
-        tmp.write(await video.read())
-
-    rotated_path = video_path.replace(".mp4", "_rotated.mp4")
-    rotate_video(video_path, rotated_path, camera)
-
+@app.post("/predict_sequence_asl")
+async def predict_sequence_asl(payload: dict = Body(...)):
     try:
-        result = evaluate_video(rotated_path, model_asl, word_ids_asl)
-    finally:
-        os.remove(video_path)
-        if os.path.exists(rotated_path):
-            os.remove(rotated_path)
+        frames_b64 = payload.get("frames") or payload.get("sequence")
+        camera_id = payload.get("camera", 1)  # 1 = trasera, 2 = frontal NUEVO
 
-    return JSONResponse(content={"prediction": result})
+
+        if not frames_b64:
+            return JSONResponse({"error": "No frames provided"}, status_code=400)
+
+        result = predict_sequence(frames_b64, model_asl, word_ids_asl, camera_id)
+        return JSONResponse(result)
+    finally:
+        gc.collect()
 
