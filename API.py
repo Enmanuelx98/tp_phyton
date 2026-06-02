@@ -21,7 +21,7 @@ ROOT_PATH = os.getcwd()
 MODEL_FOLDER_PATH = os.path.join(ROOT_PATH, "models")
 
 # ---------- Modelos y JSONs ----------
-MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"modelLSP_v2_{MODEL_FRAMES}.keras")
+MODEL_PATH = os.path.join(MODEL_FOLDER_PATH, f"modelLSPBASE_v1_{MODEL_FRAMES}.keras")
 WORDS_JSON_PATH = os.path.join(MODEL_FOLDER_PATH, "words_asl.json")
 
 MODEL_PATH_ASL = os.path.join(MODEL_FOLDER_PATH, f"modelASL_v2_{MODEL_FRAMES}.keras")
