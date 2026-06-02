@@ -38,8 +38,8 @@ with open(WORDS_JSON_PATH_ASL, "r") as f:
 
 # ---------- Inicializar MediaPipe ----------
 holistic = Holistic(
-    static_image_mode=True,
-    model_complexity=1,
+    static_image_mode=False,
+    model_complexity=0,
     smooth_landmarks=False,
     enable_segmentation=False,
     refine_face_landmarks=False,
@@ -67,6 +67,7 @@ def mediapipe_detection(image):
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image_rgb.flags.writeable = False
     results = holistic.process(image_rgb)
+    image_rgb.flags.writeable = True
     return results
 
 def draw_hand_landmarks(image, results):
@@ -117,7 +118,7 @@ def predict_sequence(frames_b64: List[str], model, word_ids, camera_id=1):
         else:
             # o directamente:
             img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-
+        img = cv2.resize(img, (320, 240))
         results = mediapipe_detection(img)
         kp = extract_keypoints_from_results(results)
         kp_seq.append(kp)
@@ -131,12 +132,13 @@ def predict_sequence(frames_b64: List[str], model, word_ids, camera_id=1):
 
     #cv2.destroyAllWindows()
 
-    if not kp_seq:
+    if len(kp_seq) == 0:
         return {"error": "No valid frames with hands detected"}
 
-    kp_seq = np.array(kp_seq, dtype=np.float16)
+    kp_seq = np.array(kp_seq, dtype=np.float32)
 
-    pred = model.predict(np.expand_dims(kp_seq, axis=0), verbose=0)[0]
+    input_data = np.expand_dims(kp_seq,axis=0)
+    pred = model.predict(input_data,verbose=0)[0]
     idx = int(np.argmax(pred))
     conf = float(pred[idx])
     word = word_ids[idx] if conf > THRESHOLD else None
@@ -147,30 +149,23 @@ def predict_sequence(frames_b64: List[str], model, word_ids, camera_id=1):
 # ---------- Endpoints ----------
 @app.post("/predict_sequence")
 async def predict_sequence_lsp(payload: dict = Body(...)):
-    try:
-        frames_b64 = payload.get("frames") or payload.get("sequence")
-        camera_id = payload.get("camera", 1)  # 1 = trasera, 2 = frontal NUEVO
+    frames_b64 = payload.get("frames") or payload.get("sequence")
+    camera_id = payload.get("camera", 1)  # 1 = trasera, 2 = frontal NUEVO
 
-        if not frames_b64:
-            return JSONResponse({"error": "No frames provided"}, status_code=400)
+    if not frames_b64:
+        return JSONResponse({"error": "No frames provided"}, status_code=400)
 
-        result = predict_sequence(frames_b64, model, word_ids, camera_id)
-        return JSONResponse(result)
-    finally:
-        gc.collect()
+    result = predict_sequence(frames_b64, model, word_ids, camera_id)
+    return JSONResponse(result)
 
 @app.post("/predict_sequence_asl")
 async def predict_sequence_asl(payload: dict = Body(...)):
-    try:
-        frames_b64 = payload.get("frames") or payload.get("sequence")
-        camera_id = payload.get("camera", 1)  # 1 = trasera, 2 = frontal NUEVO
+    frames_b64 = payload.get("frames") or payload.get("sequence")
+    camera_id = payload.get("camera", 1)  # 1 = trasera, 2 = frontal NUEVO
 
+    if not frames_b64:
+        return JSONResponse({"error": "No frames provided"}, status_code=400)
 
-        if not frames_b64:
-            return JSONResponse({"error": "No frames provided"}, status_code=400)
-
-        result = predict_sequence(frames_b64, model_asl, word_ids_asl, camera_id)
-        return JSONResponse(result)
-    finally:
-        gc.collect()
+    result = predict_sequence(frames_b64, model_asl, word_ids_asl, camera_id)
+    return JSONResponse(result)
 
